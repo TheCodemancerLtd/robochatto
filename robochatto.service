@@ -1,0 +1,17 @@
+[Unit]
+Description=RoboChatto - Chatto chat bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ffeliziani/source/repos/robochatto
+ExecStart=/home/ffeliziani/source/repos/robochatto/.venv/bin/python3 bot.py
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=/home/ffeliziani/source/repos/robochatto/robochatto.env
+Environment=ROBOCHATTO_DB=/home/ffeliziani/source/repos/robochatto/robochatto.db
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
