@@ -1,0 +1,22 @@
+services:
+  robochatto:
+    build:
+      context: .
+      args:
+        CHATTOLIB_REF: main
+    image: robochatto:0.1.0b1
+    container_name: robochatto
+    restart: unless-stopped
+    env_file:
+      - robochatto.env
+    volumes:
+      - robochatto-data:/data
+    networks:
+      - nginx
+
+volumes:
+  robochatto-data:
+
+networks:
+  nginx:
+    external: true
