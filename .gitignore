@@ -3,3 +3,5 @@ __pycache__/
 .pytest_cache/
 robochatto.env
 robochatto.db
+dist/
+*.egg-info/

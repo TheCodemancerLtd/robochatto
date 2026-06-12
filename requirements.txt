@@ -1,2 +1,2 @@
-chattolib>=0.0.1
+chattolib>=0.1.0b3
 httpx>=0.27

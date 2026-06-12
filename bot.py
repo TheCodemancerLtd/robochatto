@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import httpx
 
 from chattolib.client import ChattoClient
-from chattolib.subscriptions import subscribe_space_events
+from chattolib.subscriptions import subscribe_events
 from chattolib.types import PresenceStatus
 
 START_TIME = time.monotonic()
@@ -33,7 +33,6 @@ def init_db() -> sqlite3.Connection:
             timestamp TEXT NOT NULL,
             user_id TEXT NOT NULL,
             user_login TEXT NOT NULL,
-            space_id TEXT NOT NULL,
             room_id TEXT NOT NULL,
             command TEXT NOT NULL,
             response TEXT NOT NULL
@@ -67,7 +66,7 @@ def init_db() -> sqlite3.Connection:
     if db.execute("SELECT COUNT(*) FROM user_tiers").fetchone()[0] == 0:
         db.executemany(
             "INSERT OR IGNORE INTO user_tiers (user_login, tier) VALUES (?, ?)",
-            [("felix", "admin"), ("RoboChatto", "bot"), ("chattobot", "bot")],
+            [("felix", "admin"), ("hmans", "premium"), ("RoboChatto", "bot"), ("chattobot", "bot")],
         )
     # Seed default command tiers if empty
     if db.execute("SELECT COUNT(*) FROM command_tiers").fetchone()[0] == 0:
@@ -112,14 +111,13 @@ def log_command(
     *,
     user_id: str,
     user_login: str,
-    space_id: str,
     room_id: str,
     command: str,
     response: str,
 ) -> None:
     db.execute(
-        "INSERT INTO command_log (timestamp, user_id, user_login, space_id, room_id, command, response) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (datetime.now(timezone.utc).isoformat(), user_id, user_login, space_id, room_id, command, response),
+        "INSERT INTO command_log (timestamp, user_id, user_login, room_id, command, response) VALUES (?, ?, ?, ?, ?, ?)",
+        (datetime.now(timezone.utc).isoformat(), user_id, user_login, room_id, command, response),
     )
     db.commit()
 
@@ -152,7 +150,6 @@ async def handle_event(client: ChattoClient, db: sqlite3.Connection, event: dict
     # Extract the command name (first word) for prefix commands
     cmd_name = cmd.split()[0] if cmd.split() else cmd
 
-    space_id = inner["spaceId"]
     room_id = inner["roomId"]
     event_id = event.get("id")
     in_thread = inner.get("inThread")
@@ -187,7 +184,7 @@ async def handle_event(client: ChattoClient, db: sqlite3.Connection, event: dict
         if not prompt_text:
             response = "Usage: /rc:prompt <your question>"
         else:
-            await client.add_reaction(space_id, room_id, event_id, "hourglass_flowing_sand")
+            await client.add_reaction(room_id, event_id, "hourglass_flowing_sand")
             try:
                 response = await query_ollama(prompt_text)
             except Exception as e:
@@ -195,7 +192,7 @@ async def handle_event(client: ChattoClient, db: sqlite3.Connection, event: dict
                 response = "Something went wrong."
             finally:
                 try:
-                    await client.remove_reaction(space_id, room_id, event_id, "hourglass_flowing_sand")
+                    await client.remove_reaction(room_id, event_id, "hourglass_flowing_sand")
                 except Exception:
                     pass
     else:
@@ -207,7 +204,7 @@ async def handle_event(client: ChattoClient, db: sqlite3.Connection, event: dict
     if denied_tier is not None:
         print(f"[{user_login}] {cmd_name} → denied (requires {denied_tier} tier)")
         await client.post_message(
-            space_id, room_id,
+            room_id,
             f"Access denied. `{cmd_name}` requires **{denied_tier}** tier or above.",
             in_reply_to=event_id,
             in_thread=in_thread,
@@ -215,13 +212,12 @@ async def handle_event(client: ChattoClient, db: sqlite3.Connection, event: dict
         return
 
     print(f"[{user_login}] {cmd} → replying in {room_id}")
-    await client.post_message(space_id, room_id, response, in_reply_to=event_id, in_thread=in_thread)
+    await client.post_message(room_id, response, in_reply_to=event_id, in_thread=in_thread)
 
     log_command(
         db,
         user_id=user_id,
         user_login=user_login,
-        space_id=space_id,
         room_id=room_id,
         command=cmd,
         response=response,
@@ -246,21 +242,13 @@ async def main() -> None:
         await client.update_presence(PresenceStatus.ONLINE)
         print("Presence set to ONLINE")
 
-        spaces = await client.spaces()
-        if not spaces:
-            print("No spaces found", file=sys.stderr)
-            sys.exit(1)
+        print("Subscribing to server events...")
 
-        print(f"Listening on {len(spaces)} space(s):")
-        for s in spaces:
-            print(f"  - {s.name} ({s.id})")
-
-        # Subscribe to all spaces + keep presence alive
+        # Subscribe to server events + keep presence alive
         try:
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(presence_keepalive(client))
-                for space in spaces:
-                    tg.create_task(listen_space(client, db, space.id, space.name))
+                tg.create_task(listen_events(client, db))
         finally:
             print("Shutting down (disconnecting sets presence to offline)")
             db.close()
@@ -277,17 +265,15 @@ async def presence_keepalive(client: ChattoClient) -> None:
             await asyncio.sleep(10)
 
 
-async def listen_space(
-    client: ChattoClient, db: sqlite3.Connection, space_id: str, space_name: str
-) -> None:
+async def listen_events(client: ChattoClient, db: sqlite3.Connection) -> None:
     while True:
         try:
-            async for event in subscribe_space_events(
-                client._url, client._token, space_id
+            async for event in subscribe_events(
+                client._url, client._token
             ):
                 await handle_event(client, db, event)
         except Exception as e:
-            print(f"[{space_name}] Connection lost: {e}. Reconnecting in 5s...")
+            print(f"[events] Connection lost: {e}. Reconnecting in 5s...")
             await asyncio.sleep(5)
 
 
